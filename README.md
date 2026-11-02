@@ -50,9 +50,21 @@ AnxReader ──(OpenAI 格式)──> 本代理 /v1/audio/speech
 ## 快速开始
 
 1. 复制 `.env.example` 为 `.env`,填入 `MIMO_API_KEY`(小米 MiMo 开放平台获取)。
-   `PROXY_API_KEY` **无需手动填写**——`start.sh` 首次启动时会自动本地随机生成并写入。
-2. 运行 `./start.sh`:自动安装依赖、启动本地服务(默认 8787 端口)与 Cloudflare 隧道,最后打印公网地址和 App 密钥。
-3. 停止:`./stop.sh`。
+   `PROXY_API_KEY` **无需手动填写**——启动脚本首次运行时会自动本地随机生成并写入。
+2. 运行启动脚本:自动安装依赖、启动本地服务(默认 8787 端口)与 Cloudflare 隧道,最后打印公网地址和 App 密钥。
+3. 停止:`./stop.sh`(Windows 为 `.\stop.ps1`)。
+
+### Windows
+
+脚本提供 PowerShell 版本,需先安装 Python 3 与 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)(`winget install Cloudflare.cloudflared`):
+
+```powershell
+copy .env.example .env   # 编辑 .env 填入 MIMO_API_KEY
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+powershell -ExecutionPolicy Bypass -File .\stop.ps1
+```
+
+`start.ps1` 会自动创建 `.venv`、安装依赖、后台启动服务与隧道并输出公网地址;未安装 cloudflared 时仅启动本地服务。
 
 ## Anx Reader 配置
 

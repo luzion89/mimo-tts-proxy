@@ -52,9 +52,21 @@ AnxReader ──(OpenAI format)──> gateway /v1/audio/speech
 ## Quick start
 
 1. Copy `.env.example` to `.env` and fill in `MIMO_API_KEY` (from the MiMo open platform).
-   You do **not** need to fill in `PROXY_API_KEY` — `start.sh` generates it randomly on first start and writes it into `.env`.
-2. Run `./start.sh`: installs dependencies, starts the local server (port 8787 by default) and a Cloudflare tunnel, then prints the public URL and the app key.
-3. Stop with `./stop.sh`.
+   You do **not** need to fill in `PROXY_API_KEY` — the start script generates it randomly on first start and writes it into `.env`.
+2. Run the start script: installs dependencies, starts the local server (port 8787 by default) and a Cloudflare tunnel, then prints the public URL and the app key.
+3. Stop with `./stop.sh` (Windows: `.\stop.ps1`).
+
+### Windows
+
+PowerShell scripts are provided. Requires Python 3 and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (`winget install Cloudflare.cloudflared`):
+
+```powershell
+copy .env.example .env   # edit .env and set MIMO_API_KEY
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+powershell -ExecutionPolicy Bypass -File .\stop.ps1
+```
+
+`start.ps1` creates `.venv`, installs dependencies, starts the server and tunnel in the background, and prints the public URL. Without cloudflared installed it starts the local server only.
 
 ## Anx Reader configuration
 
