@@ -2,9 +2,11 @@
 
 小米 MiMo TTS 的 **OpenAI 兼容网关**:对外提供标准的 `POST /v1/audio/speech` 接口,供 Anx Reader(安读)等只支持 OpenAI TTS 格式的阅读器朗读本地电子书(epub/mobi/txt 等)。
 
+支持 Linux/macOS 与 Windows;公网访问可选 **Tailscale Funnel(地址固定)** 或 Cloudflare 快速隧道。
+
 ## 项目初衷
 
-作者日常用安卓阅读器 [Anx Reader(安读)](https://github.com/Anxcye/anx-reader)听本地电子书,该软件只支持 OpenAI 的 `/v1/audio/speech` 接口格式;而作者充值的小米 MiMo TTS 走的是 Chat Completions 接口、音频以 base64 返回,两者完全异构,无法直接对接。为了不浪费已充值的 MiMo 额度,便写了这个本地轻量网关:对外提供 OpenAI 兼容接口,对内转接小米 MiMo TTS,并通过 Cloudflare 隧道开放给手机 App 使用。
+作者日常用安卓阅读器 [Anx Reader(安读)](https://github.com/Anxcye/anx-reader)听本地电子书,该软件只支持 OpenAI 的 `/v1/audio/speech` 接口格式;而作者充值的小米 MiMo TTS 走的是 Chat Completions 接口、音频以 base64 返回,两者完全异构,无法直接对接。为了不浪费已充值的 MiMo 额度,便写了这个本地轻量网关:对外提供 OpenAI 兼容接口,对内转接小米 MiMo TTS,并通过 Cloudflare 隧道或 Tailscale Funnel 开放给手机 App 使用。
 
 ## 特性
 
@@ -12,7 +14,9 @@
 - 自动完成格式转换:OpenAI 音色名 → MiMo 音色、语速 → MiMo 朗读指令、不支持的音频格式自动回退
 - 音频解码:MiMo 返回的 base64 音频转为原始字节流,响应行为与 OpenAI 一致
 - 附带 `/v1/models`、`/health` 端点,便于调试
-- 自带 Cloudflare 隧道脚本,一键开放公网
+- 自带 Cloudflare 快速隧道脚本,一键开放公网(地址每次启动会变)
+- 可选 **Tailscale Funnel**:公网地址固定、重启不变;未配置时自动回退 Cloudflare 快速隧道
+- Windows PowerShell 脚本:一键启动/停止,并注册登录自启计划任务,失败自动重试
 
 ## 安全架构(重要)
 
@@ -30,7 +34,7 @@
 
 1. **小米 API Key(上游)**:只存在本机 `.env`,由代理在本地调用上游时使用,**不对 App、不对公网暴露**。
 2. **代理密钥(`PROXY_API_KEY`)**:发给 App 使用的不是小米 key,而是**本地随机生成的密钥**(`secrets.token_urlsafe(24)`),首次启动时自动生成并写入 `.env`,可随时打开文件修改。即使公网地址被他人得知,没有这个密钥也无法消耗你的 MiMo 余额。
-3. **传输加密**:App 与网关之间经 Cloudflare 隧道全程 TLS 加密。
+3. **传输加密**:App 与网关之间经 Cloudflare 隧道或 Tailscale Funnel 全程 TLS 加密。Tailscale Funnel 的 TLS 在本地机器终止,Tailscale 中继只转发加密数据;Cloudflare 隧道则在 Cloudflare 边缘终止 TLS。
 4. 本仓库不包含任何真实密钥;所有密钥仅存于本机 `.env`(请勿提交到任何公开仓库)。
 
 ## 工作原理
@@ -51,20 +55,43 @@ AnxReader ──(OpenAI 格式)──> 本代理 /v1/audio/speech
 
 1. 复制 `.env.example` 为 `.env`,填入 `MIMO_API_KEY`(小米 MiMo 开放平台获取)。
    `PROXY_API_KEY` **无需手动填写**——启动脚本首次运行时会自动本地随机生成并写入。
-2. 运行启动脚本:自动安装依赖、启动本地服务(默认 8787 端口)与 Cloudflare 隧道,最后打印公网地址和 App 密钥。
+2. 运行启动脚本:自动安装依赖、启动本地服务(默认 8787 端口),再按可用方案开放公网,最后打印公网地址和 App 密钥。
 3. 停止:`./stop.sh`(Windows 为 `.\stop.ps1`)。
 
-### Windows
+### Linux / macOS
 
-脚本提供 PowerShell 版本,需先安装 Python 3 与 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)(`winget install Cloudflare.cloudflared`):
+```bash
+./start.sh   # 本地服务 + Cloudflare 快速隧道
+./stop.sh
+```
+
+### Windows(推荐 Tailscale Funnel)
+
+需要 Python 3。公网访问二选一:
+
+- **Tailscale Funnel(推荐)**:地址固定,重启不变。安装 Tailscale(`winget install Tailscale.Tailscale`)并登录,在管理后台开启 **HTTPS Certificates** 与 **Funnel**,然后执行:
+
+  ```powershell
+  tailscale funnel --bg 8787
+  ```
+
+- **Cloudflare 快速隧道(回退)**:无需账号,但地址每次启动都会变,进程退出后域名立即失效。安装 cloudflared(`winget install Cloudflare.cloudflared`)即可,`start.ps1` 会自动使用。
 
 ```powershell
-copy .env.example .env   # 编辑 .env 填入 MIMO_API_KEY
+copy .env.example .env   # 编辑 .env, 填入 MIMO_API_KEY
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 powershell -ExecutionPolicy Bypass -File .\stop.ps1
 ```
 
-`start.ps1` 会自动创建 `.venv`、安装依赖、后台启动服务与隧道并输出公网地址;未安装 cloudflared 时仅启动本地服务。
+`start.ps1` 会:
+
+- 创建 `.venv`、安装依赖、启动本地服务(优先交给计划任务 `mimo-tts-proxy`,其次直接后台运行);
+- 检测 Tailscale Funnel,已配置则使用固定地址,否则回退 Cloudflare 快速隧道;
+- 首次运行时注册登录自启计划任务 `mimo-tts-proxy`(运行 `run-server.ps1`),失败自动重试 3 次。
+
+日志:`server-task.log`(服务输出)、`task-diag.log`(启停过程)。`stop.ps1` 会先停止计划任务再释放端口。
+
+> 提示:Funnel 是公开地址,`/v1/audio/speech` 由 `PROXY_API_KEY` 保护;`/health` 和 `/v1/models` 保持公开。
 
 ## Anx Reader 配置
 
@@ -72,8 +99,8 @@ powershell -ExecutionPolicy Bypass -File .\stop.ps1
 
 | 字段 | 值 |
 |---|---|
-| URL | `https://<隧道地址>/v1/audio/speech`(`start.sh` 输出的地址;必须带完整路径) |
-| API Key | `.env` 里的 `PROXY_API_KEY`(`start.sh` 也会直接打印) |
+| URL | `https://<公网地址>/v1/audio/speech`(启动脚本输出的地址;Tailscale Funnel 地址固定;必须带完整路径) |
+| API Key | `.env` 里的 `PROXY_API_KEY`(启动脚本也会直接打印) |
 | Model | 任意值(如 `tts-1`,会被重写为 `mimo-v2.5-tts`) |
 | Voice | 直接粘贴 MiMo 音色名,或 OpenAI 音色名(自动映射) |
 | Instructions | 留空,或用中文写风格指令(见下) |
@@ -120,8 +147,10 @@ OpenAI 音色名自动映射(可在 `.env` 用 `VOICE_MAP` 覆盖):`alloy→Mia`
 
 ## 运维与故障排查
 
-- **隧道地址每次重启会变**:`start.sh` 会打印新地址,重启后需在 AnxReader 更新 URL。需要固定地址可注册 Cloudflare 账号绑定域名(命名隧道)。
-- **修改代理密钥**:直接编辑 `.env` 的 `PROXY_API_KEY` 后运行 `./start.sh` 生效。
+- **地址是否固定**:Tailscale Funnel 地址固定,重启不变;Cloudflare 快速隧道的地址每次启动都会变,进程退出后旧域名立即失效。
+- **修改代理密钥**:直接编辑 `.env` 的 `PROXY_API_KEY`,然后重启服务(Windows 运行 `.\stop.ps1` 再 `.\start.ps1`)。
+- **Windows 服务未启动**:检查计划任务 `Get-ScheduledTask -TaskName mimo-tts-proxy`,日志见 `task-diag.log` / `server-task.log`。
+- **Windows 重启后**:计划任务在用户登录时触发;Tailscale Funnel 由 Tailscale 系统服务自动恢复。
 - 长段落朗读报错时,在 AnxReader 里调小朗读分段长度。
 
 | 现象 | 原因 |
@@ -130,4 +159,5 @@ OpenAI 音色名自动映射(可在 `.env` 用 `VOICE_MAP` 覆盖):`alloy→Mia`
 | 401 Invalid API Key | `.env` 的 `MIMO_API_KEY` 错误或已撤销 |
 | 402 | MiMo 余额不足 |
 | 404 | URL 没带 `/v1/audio/speech` 完整路径 |
-| 服务启动失败 / 无隧道地址 | 查看 `server.log` / `tunnel.log` |
+| Tailscale Funnel 地址无法解析 | 隧道未启用:检查 `tailscale funnel status`,并在管理后台开启 HTTPS 与 Funnel |
+| 服务启动失败 / 无隧道地址 | 查看 `server.log` / `tunnel.log`;Windows 查看 `task-diag.log` |
