@@ -2,11 +2,13 @@
 
 An **OpenAI-compatible gateway for Xiaomi MiMo TTS**: exposes the standard `POST /v1/audio/speech` endpoint so that ebook readers that only support OpenAI's TTS format — such as [Anx Reader](https://github.com/Anxcye/anx-reader) — can read local ebooks (epub/mobi/txt) aloud with MiMo voices.
 
+Runs on Linux/macOS and Windows. Public access can use **Tailscale Funnel** (stable URL) or a Cloudflare quick tunnel.
+
 [中文文档](README.md)
 
 ## Motivation
 
-I listen to local ebooks on Android with Anx Reader, which only supports the OpenAI `/v1/audio/speech` API format. Xiaomi MiMo TTS (which I had already paid for) uses a Chat Completions-style API and returns audio as base64 inside JSON — completely incompatible with what Anx Reader expects. Rather than wasting my MiMo credits, I built this lightweight local gateway: an OpenAI-compatible API on the outside, a MiMo TTS client on the inside, exposed to my phone via a Cloudflare tunnel.
+I listen to local ebooks on Android with Anx Reader, which only supports the OpenAI `/v1/audio/speech` API format. Xiaomi MiMo TTS (which I had already paid for) uses a Chat Completions-style API and returns audio as base64 inside JSON — completely incompatible with what Anx Reader expects. Rather than wasting my MiMo credits, I built this lightweight local gateway: an OpenAI-compatible API on the outside, a MiMo TTS client on the inside, exposed to my phone via a Cloudflare tunnel or Tailscale Funnel.
 
 ## Features
 
@@ -14,7 +16,9 @@ I listen to local ebooks on Android with Anx Reader, which only supports the Ope
 - Automatic field mapping: OpenAI voice names → MiMo voices, speed → MiMo narration instructions, unsupported audio formats fall back to `mp3`
 - Decodes MiMo's base64 audio into a raw byte stream, so responses behave exactly like OpenAI's
 - Ships with `/v1/models` and `/health` endpoints for debugging
-- One-command Cloudflare tunnel for public access
+- One-command Cloudflare quick tunnel for public access (the URL changes on every restart)
+- Optional **Tailscale Funnel**: stable public URL across restarts, with automatic fallback to a Cloudflare quick tunnel
+- Windows PowerShell scripts: one-command start/stop, a logon-triggered scheduled task, and automatic restart on failure
 
 ## Security architecture
 
@@ -32,7 +36,7 @@ Two-layer key design — your real Xiaomi API key never leaves your machine:
 
 1. **Xiaomi API key (upstream)**: stored only in the local `.env`; used by the gateway when calling MiMo locally. It is **never exposed to the app or the public internet**.
 2. **Proxy key (`PROXY_API_KEY`)**: what the app actually sends is **not** your Xiaomi key — it is a key **randomly generated on your machine** (`secrets.token_urlsafe(24)`), auto-written to `.env` on first start and editable at any time. Even if the public URL leaks, nobody can burn your credits without this key.
-3. **Encrypted transport**: app-to-gateway traffic goes through a TLS-encrypted Cloudflare tunnel.
+3. **Encrypted transport**: app-to-gateway traffic is TLS-encrypted through a Cloudflare tunnel or Tailscale Funnel. With Funnel, TLS terminates on your own machine and Tailscale relays only encrypted bytes; a Cloudflare tunnel terminates TLS at Cloudflare's edge.
 4. No real keys are stored in this repository; keys live only in your local `.env` (never commit it).
 
 ## How it works
@@ -53,12 +57,27 @@ AnxReader ──(OpenAI format)──> gateway /v1/audio/speech
 
 1. Copy `.env.example` to `.env` and fill in `MIMO_API_KEY` (from the MiMo open platform).
    You do **not** need to fill in `PROXY_API_KEY` — the start script generates it randomly on first start and writes it into `.env`.
-2. Run the start script: installs dependencies, starts the local server (port 8787 by default) and a Cloudflare tunnel, then prints the public URL and the app key.
+2. Run the start script: it installs dependencies, starts the local server (port 8787 by default), opens public access with whichever option is available, and prints the public URL and app key.
 3. Stop with `./stop.sh` (Windows: `.\stop.ps1`).
 
-### Windows
+### Linux / macOS
 
-PowerShell scripts are provided. Requires Python 3 and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (`winget install Cloudflare.cloudflared`):
+```bash
+./start.sh   # local server + Cloudflare quick tunnel
+./stop.sh
+```
+
+### Windows (Tailscale Funnel recommended)
+
+Requires Python 3. Pick one public-access option:
+
+- **Tailscale Funnel (recommended)**: stable URL across restarts. Install Tailscale (`winget install Tailscale.Tailscale`), sign in, enable **HTTPS Certificates** and **Funnel** in the admin console, then run:
+
+  ```powershell
+  tailscale funnel --bg 8787
+  ```
+
+- **Cloudflare quick tunnel (fallback)**: no account needed, but the URL changes on every start and dies with the process. Install cloudflared (`winget install Cloudflare.cloudflared`) and `start.ps1` will use it automatically.
 
 ```powershell
 copy .env.example .env   # edit .env and set MIMO_API_KEY
@@ -66,7 +85,15 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 powershell -ExecutionPolicy Bypass -File .\stop.ps1
 ```
 
-`start.ps1` creates `.venv`, installs dependencies, starts the server and tunnel in the background, and prints the public URL. Without cloudflared installed it starts the local server only.
+`start.ps1` will:
+
+- create `.venv`, install dependencies, and start the local server (via the `mimo-tts-proxy` scheduled task when present, otherwise in the background);
+- use Tailscale Funnel when configured, otherwise fall back to a Cloudflare quick tunnel;
+- register the logon-triggered scheduled task `mimo-tts-proxy` (running `run-server.ps1`) on first run, with up to 3 automatic restarts.
+
+Logs: `server-task.log` (server output) and `task-diag.log` (start/stop details). `stop.ps1` stops the scheduled task before releasing the port.
+
+> Note: Funnel exposes a public URL. `/v1/audio/speech` is protected by `PROXY_API_KEY`; `/health` and `/v1/models` remain public.
 
 ## Anx Reader configuration
 
@@ -74,8 +101,8 @@ Settings → Narrate → TTS service: **OpenAI**, then fill in:
 
 | Field | Value |
 |---|---|
-| URL | `https://<tunnel-url>/v1/audio/speech` (full path required) |
-| API Key | `PROXY_API_KEY` from `.env` (also printed by `start.sh`) |
+| URL | `https://<public-url>/v1/audio/speech` (the URL printed by the start script; stable with Tailscale Funnel; full path required) |
+| API Key | `PROXY_API_KEY` from `.env` (also printed by the start script) |
 | Model | anything (e.g. `tts-1` — rewritten to `mimo-v2.5-tts`) |
 | Voice | paste a MiMo voice name directly, or an OpenAI voice name (auto-mapped) |
 | Instructions | leave empty, or write style instructions (see below) |
@@ -122,8 +149,10 @@ This gateway only provides OpenAI `/v1/audio/speech` format compatibility. MiMo 
 
 ## Operations & troubleshooting
 
-- **The tunnel URL changes on every restart**: `start.sh` prints the new URL — update it in Anx Reader. For a stable URL, register a Cloudflare account and attach a domain (named tunnel).
-- **Changing the proxy key**: edit `PROXY_API_KEY` in `.env`, then run `./start.sh`.
+- **Is the URL stable?** Tailscale Funnel keeps a stable URL across restarts. A Cloudflare quick tunnel gets a new URL on every start, and the old hostname stops resolving as soon as the process exits.
+- **Changing the proxy key**: edit `PROXY_API_KEY` in `.env`, then restart (Windows: `.\stop.ps1` then `.\start.ps1`).
+- **Windows service not running**: check `Get-ScheduledTask -TaskName mimo-tts-proxy`; see `task-diag.log` / `server-task.log`.
+- **After a Windows reboot**: the scheduled task runs at user logon; Tailscale Funnel is restored by the Tailscale system service.
 - If long passages fail, reduce Anx Reader's narration segment length.
 
 | Symptom | Cause |
@@ -132,4 +161,5 @@ This gateway only provides OpenAI `/v1/audio/speech` format compatibility. MiMo 
 | 401 Invalid API Key | `MIMO_API_KEY` is wrong or revoked |
 | 402 | MiMo balance exhausted |
 | 404 | URL missing the full `/v1/audio/speech` path |
-| Server fails to start / no tunnel URL | check `server.log` / `tunnel.log` |
+| Tailscale Funnel hostname does not resolve | Funnel is not enabled: check `tailscale funnel status` and enable HTTPS + Funnel in the admin console |
+| Server fails to start / no tunnel URL | check `server.log` / `tunnel.log`; on Windows see `task-diag.log` |
